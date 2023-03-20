@@ -1,0 +1,106 @@
+---
+title: "Data_Merge"
+author: "Matthew Coghill"
+format: html
+editor: visual
+---
+
+Steps to complete:
+
+1.  Combine datasets and find redundancies.
+
+2.  Decide whether to keep datasets separate and create an R script to combine?
+
+3.  Need some way to identify source of data
+
+4.  Simplify headings
+
+5.  Remove extraneous data
+
+These tasks will likely be carried out using data.table and tidyverse packages. First, load packages:
+
+```{r}
+
+library(tidyverse)
+library(janitor)
+library(readxl)
+
+```
+
+Next, load in the datasets. For now, focus only on the ones that Matt put into the Dropbox folder.
+
+```{r}
+
+avonet <- read_excel("./data/AVONET Supplementary dataset 1.xlsx", sheet = "AVONET3_BirdTree") |> 
+  rename("Species" = "Species3")
+birdmorph <- read_excel("./data/bird morphometrics.xlsx", sheet = "Morphometrics") |> 
+  mutate(Species = gsub("_", " ", Species))
+allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |> 
+  mutate(Species = gsub("_", " ", Species))
+altmigrant <- read.csv("./data/alt.migrant.data.csv") |> 
+  rename("Species" = "species")
+plumage <- read.csv("./data/plumage_scores.csv") |> 
+  rename("Species" = "Scientific_name")
+
+join1 <- left_join(avonet, birdmorph, by = "Species", suffix = c("_AVONET", "_BIRDMORPH"))
+
+# Select columns ending in _AVONET and _BIRDMORPH
+j1_filter <- join1 |> 
+  select(Species, ends_with(c("_AVONET", "_BIRDMORPH")))
+
+# Are common columns the same?
+j1_common_names <- unique(gsub("_AVONET|_BIRDMORPH", "", names(j1_filter)[names(j1_filter) != "Species"]))
+j1_check <- sapply(j1_common_names, function(x) {
+  colid <- paste0(x, "_BIRDMORPH")
+  altid <- paste0(x, "_AVONET")
+  df <- j1_filter |> 
+    filter(!is.na(!!as.symbol(colid)))
+  if(all(df[, colid] == df[, altid])) {
+    return(TRUE)
+  } else {
+    return(which(!df[, colid] == df[, altid]))
+  }
+}, simplify = FALSE, USE.NAMES = TRUE)
+
+# Every common column from the first join shares similar attributes to each other except for the "Migration" column where there are 2 indiscrepencies. I will proceed with the AVONET data here.
+
+
+join2 <- left_join(avonet, allbirdmorph, by = "Species", suffix = c("_AVONET", "_ALLBIRDMORPH"))
+
+# Select columns ending in _AVONET and _ALLBIRDMORPH
+j2_filter <- join2 |> 
+  select(Species, ends_with(c("_AVONET", "_ALLBIRDMORPH")))
+
+# Are common columns the same?
+j2_common_names <- unique(gsub("_AVONET|_ALLBIRDMORPH", "", names(j2_filter)[names(j2_filter) != "Species"]))
+j2_check <- sapply(j2_common_names, function(x) {
+  colid <- paste0(x, "_ALLBIRDMORPH")
+  altid <- paste0(x, "_AVONET")
+  df <- j2_filter |> 
+    filter(!is.na(!!as.symbol(colid)))
+  if(all(df[, colid] == df[, altid])) {
+    return(TRUE)
+  } else {
+    return(which(!df[, colid] == df[, altid]))
+  }
+}, simplify = FALSE, USE.NAMES = TRUE)
+
+# Many indiscrepencies here, though the ones that were similar to the first data join are similar between the 2 datasets...
+
+join3 <- left_join(avonet, altmigrant, by = "Species", suffix = c("_AVONET", "_ALTMIGRANT"))
+
+# Select columns ending in _AVONET and _ALTMIGRANT
+j3_filter <- join3 |> 
+  select(Species, ends_with(c("_AVONET", "_ALTMIGRANT")))
+
+# No common columns in these datasets
+
+join4 <- left_join(avonet, plumage, by = "Species", suffix = c("_AVONET", "_PLUMAGE"))
+
+# Select columns ending in _AVONET and _PLUMAGE
+j4_filter <- join4 |> 
+  select(Species, ends_with(c("_AVONET", "_PLUMAGE")))
+
+# No common columns in these datasets
+
+```
