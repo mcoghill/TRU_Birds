@@ -32,24 +32,22 @@ Next, load in the datasets. For now, focus only on the ones that Matt put into t
 ```{r}
 
 avonet <- read_excel("./data/AVONET Supplementary dataset 1.xlsx", sheet = "AVONET3_BirdTree") |> 
-  rename("Species" = "Species3")
-birdmorph <- read_excel("./data/bird morphometrics.xlsx", sheet = "Morphometrics") |> 
-  mutate(Species = gsub("_", " ", Species))
+  rename("Species" = "Species3") |> 
+  clean_names()
 allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |> 
-  mutate(Species = gsub("_", " ", Species))
-altmigrant <- read.csv("./data/alt.migrant.data.csv") |> 
-  rename("Species" = "species")
-plumage <- read.csv("./data/plumage_scores.csv") |> 
-  rename("Species" = "Scientific_name")
+  mutate(Species = gsub("_", " ", Species)) |> 
+  clean_names()
+passglob <- read_excel("./data/passeriformes.global.xlsx") |>
+  clean_names()
 
-join1 <- left_join(avonet, birdmorph, by = "Species", suffix = c("_AVONET", "_BIRDMORPH"))
+join1 <- left_join(avonet, birdmorph, by = "species", suffix = c("_AVONET", "_BIRDMORPH"))
 
 # Select columns ending in _AVONET and _BIRDMORPH
 j1_filter <- join1 |> 
-  select(Species, ends_with(c("_AVONET", "_BIRDMORPH")))
+  select(species, ends_with(c("_AVONET", "_BIRDMORPH")))
 
 # Are common columns the same?
-j1_common_names <- unique(gsub("_AVONET|_BIRDMORPH", "", names(j1_filter)[names(j1_filter) != "Species"]))
+j1_common_names <- unique(gsub("_AVONET|_BIRDMORPH", "", names(j1_filter)[names(j1_filter) != "species"]))
 j1_check <- sapply(j1_common_names, function(x) {
   colid <- paste0(x, "_BIRDMORPH")
   altid <- paste0(x, "_AVONET")
@@ -65,14 +63,14 @@ j1_check <- sapply(j1_common_names, function(x) {
 # Every common column from the first join shares similar attributes to each other except for the "Migration" column where there are 2 indiscrepencies. I will proceed with the AVONET data here.
 
 
-join2 <- left_join(avonet, allbirdmorph, by = "Species", suffix = c("_AVONET", "_ALLBIRDMORPH"))
+join2 <- left_join(avonet, allbirdmorph, by = "species", suffix = c("_AVONET", "_ALLBIRDMORPH"))
 
 # Select columns ending in _AVONET and _ALLBIRDMORPH
 j2_filter <- join2 |> 
-  select(Species, ends_with(c("_AVONET", "_ALLBIRDMORPH")))
+  select(species, ends_with(c("_AVONET", "_ALLBIRDMORPH")))
 
 # Are common columns the same?
-j2_common_names <- unique(gsub("_AVONET|_ALLBIRDMORPH", "", names(j2_filter)[names(j2_filter) != "Species"]))
+j2_common_names <- unique(gsub("_AVONET|_ALLBIRDMORPH", "", names(j2_filter)[names(j2_filter) != "species"]))
 j2_check <- sapply(j2_common_names, function(x) {
   colid <- paste0(x, "_ALLBIRDMORPH")
   altid <- paste0(x, "_AVONET")
@@ -87,20 +85,178 @@ j2_check <- sapply(j2_common_names, function(x) {
 
 # Many indiscrepencies here, though the ones that were similar to the first data join are similar between the 2 datasets...
 
-join3 <- left_join(avonet, altmigrant, by = "Species", suffix = c("_AVONET", "_ALTMIGRANT"))
+join3 <- left_join(avonet, altmigrant, by = "species", suffix = c("_AVONET", "_ALTMIGRANT"))
 
 # Select columns ending in _AVONET and _ALTMIGRANT
 j3_filter <- join3 |> 
-  select(Species, ends_with(c("_AVONET", "_ALTMIGRANT")))
+  select(species, ends_with(c("_AVONET", "_ALTMIGRANT")))
 
 # No common columns in these datasets
 
-join4 <- left_join(avonet, plumage, by = "Species", suffix = c("_AVONET", "_PLUMAGE"))
+join4 <- left_join(avonet, plumage, by = "species", suffix = c("_AVONET", "_PLUMAGE"))
 
 # Select columns ending in _AVONET and _PLUMAGE
 j4_filter <- join4 |> 
-  select(Species, ends_with(c("_AVONET", "_PLUMAGE")))
+  select(species, ends_with(c("_AVONET", "_PLUMAGE")))
 
 # No common columns in these datasets
 
+```
+
+Here is a list of columns requested:
+
+-   Conservation status over time  - IUCN Redlist category (allbirdmorph)
+
+-   Things that threaten it
+
+-   Habitat(s) of major importance - habitat, habitat_density (avonet)
+
+-   Country - centroids (both?)
+
+-   Population trend - allbirdmorph
+
+-   Date of last assessment
+
+-   Population severely fragmented? - islandfraction_hbw, isolation_index (allbirdmorph)
+
+-   Continuing decline of mature individuals?
+
+-   Habitat type (include all, in rank order)
+
+-   Habitat classification, areas of major importance
+
+-   Generation Length - generation_length_yrs_birdlife_database (passglob)
+
+-   Movement patterns - migration (avonet)
+
+-   Threats
+
+-   Action recovery plan
+
+Lets get these columns from as many of those data sources as possible.
+
+```{r}
+
+library(sf)
+library(nngeo)
+library(rnaturalearth)
+library(rnaturalearthhires)
+
+world <- ne_countries(scale = 10, type = "countries", returnclass = "sf") |> 
+  select(name_en) |> 
+  rename(country = name_en) |> 
+  st_transform(3857) |> 
+  st_make_valid()
+
+# Get country from centroids
+allbirdmorph2 <- allbirdmorph |> 
+  select(species, islandfraction_hbw, isolation_index, land_status_beac,
+         centroid_x, centroid_y, ext_min_x, ext_min_y, ext_max_x, ext_max_y,
+         population_trend, x2020_iucn_red_list_category_hbw) |> 
+  filter(!is.na(centroid_x)) |> 
+  st_as_sf(coords = c("centroid_x", "centroid_y"), crs = 4326) |> 
+  st_transform(3857)
+
+allbirdmorph_countries <- allbirdmorph2 |> 
+  st_intersection(world)
+
+# There are some that didn't land on a country. Instead, get the "closest" country
+# from those that didn't intersect with a boundary.
+allbirdmorph_closest <- allbirdmorph2 |> 
+  filter(!species %in% allbirdmorph_countries$species)
+
+allbirdmorph_closest$country <- world[st_nearest_feature(allbirdmorph_closest, world), ]$country
+
+# There are some that also don't have centroids:
+allbirdmorph_missing <- allbirdmorph |> 
+  select(species, islandfraction_hbw, land_status_beac, isolation_index,
+         centroid_x, centroid_y, ext_min_x, ext_min_y, ext_max_x, ext_max_y,
+         population_trend, x2020_iucn_red_list_category_hbw) |> 
+  filter(is.na(centroid_x)) |> 
+  select(-c(centroid_x, centroid_y)) |> 
+  mutate(country = NA) |> 
+  st_sf(geom = st_sfc(st_point(), crs = 3857)) |> 
+  rename(geometry = geom)
+
+allbirdmorph3 <- rbind(allbirdmorph_countries, allbirdmorph_closest,
+                       allbirdmorph_missing) |> 
+  rename_with(~ifelse(.x %in% c("species", "geometry"), .x, paste0(.x, "_allbirdmorph")))
+
+# Do a similar thing with the AVONET data
+avonet2 <- avonet |> 
+  select(species, family3, order3, species_status, habitat, habitat_density,
+         min_latitude, max_latitude, centroid_latitude, centroid_longitude,
+         range_size, migration) |> 
+  mutate(across(c(centroid_longitude, centroid_latitude), as.numeric)) |> 
+  filter(!is.na(centroid_longitude)) |> 
+  st_as_sf(coords = c("centroid_longitude", "centroid_latitude"), crs = 4326) |> 
+  st_transform(3857)
+
+avonet_countries <- avonet2 |> 
+  st_intersection(world)
+
+avonet_closest <- avonet2 |> 
+  filter(!species %in% avonet_countries$species)
+
+avonet_closest$country <- world[st_nearest_feature(avonet_closest, world), ]$country
+
+avonet_missing <- avonet |> 
+  select(species, family3, order3, species_status, habitat, habitat_density,
+         min_latitude, max_latitude, centroid_latitude, centroid_longitude,
+         range_size, migration) |> 
+  mutate(across(c(centroid_longitude, centroid_latitude), as.numeric)) |> 
+  filter(is.na(centroid_longitude)) |> 
+  select(-c(centroid_latitude, centroid_longitude)) |> 
+  mutate(country = NA) |> 
+  st_sf(geom = st_sfc(st_point(), crs = 3857)) |> 
+  rename(geometry = geom)
+
+avonet3 <- rbind(avonet_countries, avonet_closest, avonet_missing) |> 
+  rename_with(~ifelse(.x %in% c("species", "geometry"), .x, paste0(.x, "_avonet")))
+
+# Need a column from the passglob object
+passglob2 <- passglob |> 
+  select(species, generation_length_yrs_birdlife_database) |> 
+  distinct(species)
+
+# Build polygons for each bird
+avonet2_range <- do.call(rbind, lapply(1:nrow(avonet2), function(x) {
+  y <- avonet2[x, ]
+  y_min <- st_sfc(st_point(as.numeric(c(st_coordinates(y)[, "X"], y$min_latitude))), crs = 4326)
+  y_max <- st_sfc(st_point(as.numeric(c(st_coordinates(y)[, "X"], y$max_latitude))), crs = 4326)
+  y <- st_transform(y, 3857)
+  y_min <- st_transform(y_min, 3857)
+  y_max <- st_transform(y_max, 3857)
+  
+  # Build an ellipse of the range - A = pi * r1 * r2. Solve for r2,
+  # get r2 = A/(pi * r1)
+  range_area <- units::set_units(as.numeric(y$range_size), km^2)
+  ey <- st_distance(y_min, y_max) / 2
+  ex <- (range_area / (pi * ey)) |> 
+    units::set_units(m) |> 
+    as.numeric()
+  
+  y_round <- st_ellipse(y, ex = ex, ey = as.numeric(ey), res = 100) |> 
+    st_set_crs(3857)
+  st_geometry(y) <- y_round
+  return(y)
+  
+}))
+```
+
+Okay. Let's try merging everything together:
+
+```{r}
+
+data_merge <- left_join(avonet3, st_drop_geometry(allbirdmorph3)) |> 
+  left_join(passglob2) |> 
+  select(-c(min_latitude_avonet, max_latitude_avonet, ext_min_x_allbirdmorph,
+            ext_min_y_allbirdmorph, ext_max_x_allbirdmorph,
+            ext_max_y_allbirdmorph)) |> 
+  select(sort(tidyselect::peek_vars())) |> 
+  relocate(species, family3_avonet, order3_avonet) |> 
+  relocate(geometry, .after = last_col())
+  
+
+write.csv(data_merge, "./data/data_merge.csv")
 ```
