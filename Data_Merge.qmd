@@ -19,7 +19,7 @@ Steps to complete:
 
 These tasks will likely be carried out using data.table and tidyverse packages. First, load packages:
 
-```{r}
+```{r, include=FALSE}
 
 library(tidyverse)
 library(janitor)
@@ -51,14 +51,29 @@ allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |>
   select(-c(x, x_1, x_2, species, sisid, check_species_taxon,
             binomial_beac_y, family_english_hbw,
             family_english_beac, order_hbw, family_hbw,
-            subfamily_hbw, tribe_hbw, n:species_status)) |> 
-  rename(species = binomial_beac_x) |> 
+            subfamily_hbw, tribe_hbw, long:isolation_index,
+            n:species_status)) |> 
+  rename(species = binomial_beac_x, 
+         redlist_category_2020_hbw = x2020_iucn_red_list_category_hbw) |> 
   rename_with(~case_when(
     endsWith(.x, "beac") ~ .x,
-    endsWith(.x, "hbw") ~ .x,
+    endsWith(.x, "hbw") ~ gsub("_hbw$", "_botw", .x),
     .x == "species" ~ .x,
-    TRUE ~ paste0(.x, "_allbirdmorph")
-  ))
+    TRUE ~ paste0(.x, "_iucn")
+  )) |> 
+  mutate(redlist_category_2020_botw = case_when(
+    redlist_category_2020_botw == "LC" ~ "Least Concern",
+    redlist_category_2020_botw == "NT" ~ "Near Threatened",
+    redlist_category_2020_botw == "VU" ~ "Vulnerable",
+    redlist_category_2020_botw == "EN" ~ "Endangered",
+    redlist_category_2020_botw == "CR" ~ "Critically Endangered",
+    redlist_category_2020_botw == "EX" ~ "Extinct",
+    redlist_category_2020_botw == "DD" ~ "Data Deficient",
+    redlist_category_2020_botw == "EW" ~ "Extinct in the Wild",
+    redlist_category_2020_botw == "CR (PE)" ~ "Critically Endangered (Possibly Extinct)",
+    .default = NA),
+    redlist_criteria_iucn = ifelse(
+      redlist_criteria_iucn == "", NA, redlist_criteria_iucn))
 
 # Next large dataset: Passeriformes.global.xlsx.
 # This contains many columns with many morphometrics, but
@@ -69,46 +84,76 @@ allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |>
 passglob <- read_excel("./data/passeriformes.global.xlsx", na = "NA") |>
   clean_names() |> 
   select(-c(taxon_id_iucn_redlist, order_iucn_redlist, 
-            family_name_iucn_redlist, number,
-            scientific_name_iucn_redlist, formerging))
+            family_name_iucn_redlist, number, name_change,
+            habitat, natural_habitat_1,
+            scientific_name_iucn_redlist, formerging, prebasic,
+            feather_prebasic:breeding_territory_north_america,
+            zoogeographical_zone:t_dichrom, e_prebasic:last_col(),
+            habitat_north_america, habitat_binary)) |> 
+  rename(nest_location = nesting,
+         non_breeding_behaviour = social_system,
+         mean_clutch_size = clutch_size,
+         mean_number_of_broods = broods) |> 
+  mutate(breeding_system = case_when(
+    breeding_system == "SM" ~ "Monogamous",
+    breeding_system == "SMPO" ~ "Polygynous",
+    .default = breeding_system),
+    non_breeding_behaviour = ifelse(
+      non_breeding_behaviour == "social", "Gregarious",
+      non_breeding_behaviour)) |> 
+  rename_with(~case_when(
+    endsWith(.x, "_birdlife_database") ~ gsub("_birdlife_database$", "_bldb", .x),
+    endsWith(.x, "_et_al") ~ .x,
+    endsWith(.x, "_iucn_redlist") ~ gsub("_iucn_redlist$", "_iucn", .x),
+    endsWith(.x, "_allaboutbirds") ~ .x,
+    endsWith(.x, "_cornell") ~ gsub("_cornell$", "_botw", .x),
+    endsWith(.x, "_pyle2018") ~ .x,
+    endsWith(.x, "2015") ~ .x,
+    .x %in% c("species", "subspecies", "full_species") ~ .x,
+    .x %in% c("winter_territorial", "mean_clutch_size",
+              "mean_number_of_broods", "breeding_system",
+              "non_breeding_behaviour", "nest_type", "nest_location",
+              "behaviour",
+              "diet_breadth", 
+              "breeding_range") ~ paste0(.x, "_botw"),
+    .default = paste0(.x, "_beac")
+  ))
 
-# The below dataset is commented out because all of the data is
-# also contained in the passglob data.
-# altmigrant <- read.csv("./data/alt.migrant.data.csv") |> 
-#   clean_names()
-
-
-
-moult_migration <- read.csv("./data/Claudie/data_moult-migration.csv") |> 
-  clean_names()
-
-
-
-plumage <- read.csv("./data/plumage_scores.csv") |> 
+gran <- read_excel("./data/TRU_Database.xlsx", sheet = 1, na = "N/A") |> 
   clean_names() |> 
-  rename(species = scientific_name)
+  select(-c(common_name, x28)) |> 
+  mutate(non_breeding_behaviour = ifelse(
+    non_breeding_behaviour == "Gregariouos", "Gregarious",
+    non_breeding_behaviour)) |> 
+  rename(winter_territorial = wintering_territoriality,
+         species = scientific_name) |> 
+  rename_with(~ifelse(.x == "species", .x, paste0(.x, "_botw"))) |>
+  rename_with(~ifelse(startsWith(.x, "ave"), gsub("ave", "mean", .x), .x))
+    
 
-winter_moult_EU <- read_excel("./data/Claudie/data_winter_moults.xlsx", sheet = "1. Europe") |> 
-  clean_names() |> 
-  select(-last_col())
+# Try smashing them together
+join1 <- left_join(passglob, gran)
 
-winter_moult_NA <- read_excel("./data/Claudie/data_winter_moults.xlsx", sheet = "2. North America") |> 
-  clean_names()
+join2 <- left_join(allbirdmorph, join1, by = c(
+  "species" = "species", "common_name_botw" = "common_name_s_iucn"))
+
+all_data <- left_join(avonet, join2, by = "species") |> 
+  select(sort(tidyselect::peek_vars())) |> 
+  relocate(ends_with("_avo"), .before = 1) |> 
+  relocate(ends_with("_iucn"), .after = length(ends_with("_avo"))) |>
+  relocate(ends_with("_bldb"), .after = sum(
+    length(ends_with("_avo")), length(ends_with("_iucn")))) |> 
+  relocate(ends_with("_botw"), .after = sum(
+    length(ends_with("_avo")), length(ends_with("_iucn")),
+    length(ends_with("_bldb")))) |> 
+  relocate(ends_with("_beac"), .after = sum(
+    length(ends_with("_avo")), length(ends_with("_iucn")),
+    length(ends_with("_bldb")), length(ends_with("_botw")))) |> 
+  relocate(species, subspecies, full_species, family, order, 
+           .before = 1)
 
 
-```
-
-It's pretty clear that moulting datasets are related. Lets do some data wrangling on those:
-
-```{r}
-
-winter_moult <- rbind(winter_moult_EU, winter_moult_NA) |> 
-  select(species, subspecies, full_species, non_breeding_latitude,
-         habitat_breeding, habitat_non_breeding, prebasic,
-         prealternate, feather_alternate,
-         )
-
-moult2 <- left_join(winter_moult, moult_migration, by = c("full_species" = "species_1", "species" = "species"))
+# Now need to decide what to keep/get rid of!
 
 ```
 
