@@ -61,18 +61,7 @@ allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |>
     .x == "species" ~ .x,
     TRUE ~ paste0(.x, "_iucn")
   )) |> 
-  mutate(redlist_category_2020_botw = case_when(
-    redlist_category_2020_botw == "LC" ~ "Least Concern",
-    redlist_category_2020_botw == "NT" ~ "Near Threatened",
-    redlist_category_2020_botw == "VU" ~ "Vulnerable",
-    redlist_category_2020_botw == "EN" ~ "Endangered",
-    redlist_category_2020_botw == "CR" ~ "Critically Endangered",
-    redlist_category_2020_botw == "EX" ~ "Extinct",
-    redlist_category_2020_botw == "DD" ~ "Data Deficient",
-    redlist_category_2020_botw == "EW" ~ "Extinct in the Wild",
-    redlist_category_2020_botw == "CR (PE)" ~ "Critically Endangered (Possibly Extinct)",
-    .default = NA),
-    redlist_criteria_iucn = ifelse(
+  mutate(redlist_criteria_iucn = ifelse(
       redlist_criteria_iucn == "", NA, redlist_criteria_iucn))
 
 # Next large dataset: Passeriformes.global.xlsx.
@@ -83,9 +72,13 @@ allbirdmorph <- read.csv("./data/all bird morphometrics.csv") |>
 # or not in birdtree.
 passglob <- read_excel("./data/passeriformes.global.xlsx", na = "NA") |>
   clean_names() |> 
+  # filter(!name_change %in% c("Extinct", "extinct", "Newly discovered", "Newly discoverd")) |> 
   select(-c(taxon_id_iucn_redlist, order_iucn_redlist, 
             family_name_iucn_redlist, number, name_change,
             habitat, natural_habitat_1,
+            population_trend_birdlife_database,
+            average_mass_birdlife_database,
+            category_iucn_redlist, ends_with("_2015"),
             scientific_name_iucn_redlist, formerging, prebasic,
             feather_prebasic:breeding_territory_north_america,
             zoogeographical_zone:t_dichrom, e_prebasic:last_col(),
@@ -100,7 +93,8 @@ passglob <- read_excel("./data/passeriformes.global.xlsx", na = "NA") |>
     .default = breeding_system),
     non_breeding_behaviour = ifelse(
       non_breeding_behaviour == "social", "Gregarious",
-      non_breeding_behaviour)) |> 
+      non_breeding_behaviour),
+    winter_territorial = ifelse(winter_territorial == "Na", NA, winter_territorial)) |> 
   rename_with(~case_when(
     endsWith(.x, "_birdlife_database") ~ gsub("_birdlife_database$", "_bldb", .x),
     endsWith(.x, "_et_al") ~ .x,
@@ -121,7 +115,7 @@ passglob <- read_excel("./data/passeriformes.global.xlsx", na = "NA") |>
 
 gran <- read_excel("./data/TRU_Database.xlsx", sheet = 1, na = "N/A") |> 
   clean_names() |> 
-  select(-c(common_name, x28)) |> 
+  select(-c(x28)) |> 
   mutate(non_breeding_behaviour = ifelse(
     non_breeding_behaviour == "Gregariouos", "Gregarious",
     non_breeding_behaviour)) |> 
@@ -132,13 +126,127 @@ gran <- read_excel("./data/TRU_Database.xlsx", sheet = 1, na = "N/A") |>
     
 
 # Try smashing them together
-join1 <- left_join(passglob, gran)
+join1 <- right_join(passglob, gran, by = c("species" = "species", "common_name_s_iucn" = "common_name_botw")) |> 
+  mutate(winter_territorial_botw = ifelse(
+    !is.na(winter_territorial_botw.y), winter_territorial_botw.y,
+    winter_territorial_botw.x),
+    mean_clutch_size_botw = ifelse(
+      !is.na(mean_clutch_size_botw.y), mean_clutch_size_botw.y,
+      mean_clutch_size_botw.x),
+    mean_number_of_broods_botw = ifelse(
+      !is.na(mean_number_of_broods_botw.y), 
+      mean_number_of_broods_botw.y, mean_number_of_broods_botw.x),
+    breeding_system_botw = ifelse(
+      !is.na(breeding_system_botw.y), breeding_system_botw.y, 
+      breeding_system_botw.x),
+    non_breeding_behaviour_botw = ifelse(
+      !is.na(non_breeding_behaviour_botw.y), 
+      non_breeding_behaviour_botw.y, non_breeding_behaviour_botw.x),
+    nest_type_botw = ifelse(
+      !is.na(nest_type_botw.y), nest_type_botw.y, nest_type_botw.x),
+    nest_location_botw = ifelse(
+      !is.na(nest_location_botw.y), nest_location_botw.y, 
+      nest_location_botw.x)) |> 
+  select(-c(ends_with(".x"), ends_with(".y")))
 
-join2 <- left_join(allbirdmorph, join1, by = c(
-  "species" = "species", "common_name_botw" = "common_name_s_iucn"))
+passglob_filter <- passglob |>
+  filter(!species %in% join1$species & !common_name_s_iucn %in% join1$common_name_s_iucn)
 
-all_data <- left_join(avonet, join2, by = "species") |> 
-  select(sort(tidyselect::peek_vars())) |> 
+join11 <- data.table::rbindlist(list(passglob_filter, join1), fill = TRUE) |> 
+  separate_wider_delim(common_name_s_iucn, " (OR) ", names_sep = "_", too_few = "align_start")
+
+# Fix common names in join 1 to match allbirdmorph common names 
+# before merging
+join1_fix <- lapply(1:nrow(join11), function(x) {
+  y <- join11[x, ]
+  abm <- allbirdmorph |> 
+    filter(species == y$species)
+  if(nrow(abm) > 0) {
+    if(abm$common_name_botw %in% c(
+      y$common_name_s_iucn_1, y$common_name_s_iucn_2,
+      y$common_name_s_iucn_3, y$common_name_s_iucn_4,
+      y$common_name_s_iucn_5, y$common_name_s_iucn_6,
+      y$common_name_s_iucn_7, y$common_name_s_iucn_8,
+      y$common_name_s_iucn_9
+    )) {
+      y$common_name_s_iucn_1 <- abm$common_name_botw
+      return(y)
+    } else {
+      return(data.frame())
+    } 
+  } else {
+    return(data.frame())
+  }
+})
+
+join111 <- do.call(rbind, join1_fix) |> 
+  select(-c(common_name_s_iucn_2:common_name_s_iucn_9)) |> 
+  rename(common_names_iucn = common_name_s_iucn_1)
+
+remain <- join11 |> filter(!species %in% join111$species)
+remain_fix <- do.call(rbind, lapply(1:nrow(remain), function(x) {
+  y <- remain[x, ]
+  if(y$common_name_s_iucn_1 %in% allbirdmorph$common_name_botw) {
+    return(y)
+  } else if(y$common_name_s_iucn_2 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_2)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else if(y$common_name_s_iucn_3 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_3)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else if(y$common_name_s_iucn_4 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_4)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else if(y$common_name_s_iucn_5 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_5)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else if(y$common_name_s_iucn_6 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_6)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else if(y$common_name_s_iucn_7 %in% allbirdmorph$common_name_botw) {
+    abm <- allbirdmorph |> 
+      filter(common_name_botw == y$common_name_s_iucn_7)
+    y$common_name_s_iucn_1 <- abm$common_name_botw
+    return(y)
+  } else {
+    return(data.frame())
+  }
+})) |> 
+  select(-c(common_name_s_iucn_2:common_name_s_iucn_9)) |> 
+  rename(common_names_iucn = common_name_s_iucn_1)
+
+remain_lorena <- remain |> 
+  filter(!is.na(bc_botw), !species %in% remain_fix$species) |> 
+  select(-c(common_name_s_iucn_2:common_name_s_iucn_9)) |> 
+  rename(common_names_iucn = common_name_s_iucn_1)
+
+join1_final <- rbind(join111, remain_fix, remain_lorena)
+
+
+join2 <- right_join(allbirdmorph, join1_final, by = c(
+  "species" = "species", "common_name_botw" = "common_names_iucn"))
+
+abm_filter <- allbirdmorph |> 
+  filter(!species %in% join2$species & !common_name_botw %in% join2$common_name_botw)
+
+join2 <- data.table::rbindlist(list(abm_filter, join2), fill = TRUE)
+
+join3 <- right_join(avonet, join2, by = "species")
+avonet_filter <- avonet |> 
+  filter(!species %in% join3$species)
+
+all_data <- data.table::rbindlist(list(avonet_filter, join3), fill = TRUE) |> 
+  # select(sort(tidyselect::peek_vars())) |> 
   relocate(ends_with("_avo"), .before = 1) |> 
   relocate(ends_with("_iucn"), .after = length(ends_with("_avo"))) |>
   relocate(ends_with("_bldb"), .after = sum(
@@ -149,11 +257,151 @@ all_data <- left_join(avonet, join2, by = "species") |>
   relocate(ends_with("_beac"), .after = sum(
     length(ends_with("_avo")), length(ends_with("_iucn")),
     length(ends_with("_bldb")), length(ends_with("_botw")))) |> 
-  relocate(species, subspecies, full_species, family, order, 
-           .before = 1)
+  relocate(species, subspecies, full_species, common_name_botw,
+           family, order, .before = 1) |> 
+  arrange(species)
 
 
 # Now need to decide what to keep/get rid of!
+
+# Build metadata
+suff <- tribble(
+  ~Suffix, ~Expansion,
+  "_avo", "AVONET",
+  "_iucn", "IUCN Red List",
+  "_bldb", "Birdlife Database",
+  "_botw", "Birds of the World",
+  "_beac", "Behavioural Ecology and Conservation Lab (TRU)",
+  "", ""
+)
+
+metadata <- tribble(
+  ~Column, ~Explanation, ~ Source,
+  "species", "Binomial species taxonomy and nomenclature according to BirdTree, the most recent global bird phylogeny", "AVONET",
+  "subspecies", "Subspecies (if present) for each bird", "BOTW",
+  "full_species", "Concatenated species and subspecies", "BOTW",
+  "common_name_botw", "Common English names", "BOTW",
+  "family", "Family-level taxonomy and nomenclature according to BirdTree, the most recent global bird phylogeny", "AVONET",
+  "order", "Order-level taxonomy according to BirdTree, the most recent global bird phylogeny", "AVONET",
+  "total_individuals_avo", "Number of individual specimens and live birds measured for each species", "AVONET",
+  "female_avo", "Number of measured individuals identified as female", "AVONET",
+  "male_avo", "Number of measured individuals identified as male", "AVONET",
+  "unknown_avo", "Number of unsexed individuals measured", "AVONET",
+  "complete_measures_avo", "Number of measured individuals with complete set of morphometric trait measurements", "AVONET",
+  "beak_length_culmen_avo", "Length from the tip of the beak to the base of the skull", "AVONET",
+  "beak_length_nares_avo", "Length from the anterior edge of the nostrils to the tip of the beak", "AVONET",
+  "beak_width_avo", "Width of the beak at the anterior edge of the nostrils", "AVONET",
+  "beak_depth_avo", "Depth of the beak at the anterior edge of the nostrils", "AVONET",
+  "tarsus_length_avo", "Length of the tarsus from the posterior notch between tibia and tarsus, to the end of the last scale of acrotarsium (at the bend of the foot)", "AVONET",
+  "wing_length_avo", "Length from the carpal joint (bend of the wing) to the tip of the longest primary on the unflattened wing", "AVONET",
+  "kipps_distance_avo", "Length from the tip of the first secondary feather to the tip of the longest primary", "AVONET",
+  "secondary1_avo", "Length from the carpal joint (bend of the wing) to the tip of the first secondary, i.e. the outermost secondary adjacent to the innermost primary feather. Secondary1 is roughly equivalent to Wing length minus Kipp’s distance (measured in a fully folded and flat wing)", "AVONET",
+  "hand_wing_index_avo", "100*DK/Lw, where DK is Kipp’s distance and Lw is wing length (i.e., Kipp’s distance corrected for wing size). Species average HWI differ from estimates in Sheard et al. (2020) because of much higher sampling of individuals in some species, as well as taxonomic effects in the BirdLife list", "AVONET",
+  "tail_length_avo", "Distance between the tip of the longest rectrix and the point at which the two central rectrices protrude from the skin, typically measured using a ruler inserted between the two central rectrices", "AVONET",
+  "mass_avo", "Body mass given as species average (incorporating both male and female body mass)", "AVONET",
+  "mass_source_avo", "Dunning (= Dunning, JB [2008] CRC Handbook of Avian Body Masses);
+EltonTraits_Other (= mass published by Wilman et al. 2014 EltonTraits 1.0. Ecology, on basis of literature other than Dunning, usually Handbook of the Birds of the World [now Birds of the World, Cornell])
+EltonTraits_GenAvg (= average of the genus, published in Wilman et al. 2014 EltonTraits 1.0. Ecology); 
+EltonTraits_Model (= inferred from mass and length data, with mass-length relationships parameterized at family level, published in Wilman et al. 2014 EltonTraits 1.0. Ecology);
+Updated_literature (= any previous data that was calculated indirectly by Wilman et al. 2014 [Genavg or Modelled] or missing due to taxonomic gaps in BirdLife/eBird was replaced with new data where available from literature and online resources, including Birds of the World - specific sources are listed in the Mass.Ref.Source column);  
+Updated_live.sample (= any previous data that was calculated indirectly by Wilman et al. 2014 [Genavg or Modelled] or missing due to taxonomic gaps in BirdLife/eBird was replaced with new data where available from museum labels and/or field data of from wild birds weighed using a Pezola balance before release. Specific sources are listed in the Mass.Ref.Source column);  
+Inferred (= where EltonTraits GenAvg or Modelled data seemed misleading, and no published data were available for updating, we replaced it where possible with data inferred directly from a morphologically similar relative. Reference species and Traits inferred columns indicate where mass has been inferred and from which species);
+DataFromSplit (= daughter species body mass inferred from parent species after split; the parent or nominate form is typically morphologically similar and provides a reasonable estimate of body mass, particularly as mass data used to calculate the parent species body mass in earlier publications sometimes includes data from the recently split daughter species).", "AVONET",
+  "mass_refs_other_avo", "Source of Updated mass data, including primary and secondary literature, online resources and museum specimen data. Primary and secondary literature citations or abbreviations are given in full in the sheet named 'Mass_Sources'", "AVONET",
+  "inference_avo", "NO = all biometric trait data were obtained from direct measurement of specimens, or in the case of body mass from published sources
+YES = at least some of the biometric traits were unavailable from specimens so these trait data were inferred from a closely related species; in some cases all morphological measurements were taken directly except for body mass, which can't be measured on museum specimens.", "AVONET",
+  "traits_inferred_avo", "List of traits inferred from the reference species", "AVONET",
+  "reference_species_avo", "Species from which the biometric data were inferred", "AVONET",
+  "habitat_avo", "Desert (= drylands and other open arid habitats, often sandy with very sparse vegetation); 
+Rock (= rocky substrate typically with no or very little vegetation, including rocky outcrops, rocky coastlines, arid stony steppes, rocky mountaintops and mountain slopes); 
+Grassland (=  open dry to moist grass-dominated landscapes, at all elevations); 
+Shrubland (= low stature bushy habitats, included thornscrub, thorny or arid savanna, caatinga, xerophytic shrubland and coastal scrub); 
+Woodland (= medium stature tree-dominated habitats, including Acacia woodland, riparian woodlands, mangrove forests, forest edges, also more open parkland with scattered taller trees);
+Forest (= tall tree-dominated vegetation with more or less closed canopy, including palm forest); 
+Human modified (urban landscapes, intensive agriculture, gardens); 
+Wetland (= wide range of freshwater aquatic habitats including lakes, marshes, swamps and reedbeds); 
+Riverine (= associated with rivers and streams at all elevations); 
+Coastal (= intertidal zones within immediate vicinity of beaches, estuaries, brackish to salty marshes, including mudflats, lagoons, alkaline wetlands, coastal dunes and harbours);
+Marine (= pelagic, on sea near coasts, including species in the intertidal zone on beaches, and those pelagic species nesting near the sea on cliffs, islets and islands).", "AVONET",
+"habitat_density_avo", "1 = Dense habitats. Species primarily lives in the lower or middle storey of forest, or in dense thickets, dense shrubland etc.
+2 = Semi-open habitats. Species primarily lives in open shrubland, scattered bushes, parkland, low dry or deciduous forest, thorn forest. 
+3 = Open habitats. Species primarily lives in desert, grassland, open water, low shrubs, rocky habitats, seashores, cities. Also applies to species living mainly on top of forest canopy (i.e. mostly in the open)", "AVONET",
+"migration_avo", "1 = Sedentary. 
+2 = Partially migratory, i.e. minority of population migrates long distances, or most of population undergoes short-distance migration, nomadic movements, distinct altitudinal migration, etc.
+3 = Migratory, i.e. majority of population undertakes long-distance migration", "AVONET",
+"trophic_level_avo", "Herbivore = species obtaining at least 70% of food resources from plants; Carnivore = species obtaining at least 70% of food resources by consuming live invertebrate or vertebrate animals; Scavenger = species obtaining at least 70% of food resources from carrion or refuse; Omnivore = species obtaining resources from multiple trophic level in roughly equal proportion", "AVONET",
+"trophic_niche_avo", "Frugivore = species obtaining at least 60% of food resources from fruit; 
+Granivore = species obtaining at least 60% of food resources from seeds or nuts; 
+Nectarivore =  species obtaining at least 60% of food resources from nectar; 
+Herbivore = species obtaining at least 60% of food resources from other plant materials in non-aquatic systems, including leaves, buds, whole flowers etc.; 
+Herbivore aquatic = species obtaining at least 60% of food resources from plant materials in aquatic systems, including algae and aquatic plant leaves; 
+Invertivore = species obtaining at least 60% of food resources from invertebrates in terrestrial systems, including insects, worms, arachnids, etc.; 
+Vertivore = species obtaining at least 60% of food resources from vertebrate animals in terrestrial systems, including mammals, birds, reptiles etc.; 
+Aquatic Predator = species obtaining at least 60% of food resources from vertebrate and invertebrate animals in aquatic systems, including fish, crustacea, molluscs, etc; 
+Scavenger = species obtaining at least 60% of food resources from carrion, offal or refuse; Omnivore = Species using multiple niches, within or across trophic levels, in relatively equal proportions ", "AVONET",
+"primary_lifestyle_avo", "Aerial = species spends much of the time in flight, and hunts or forages predominantly on the wing; 
+Terrestrial = species spends majority of its time on the ground, where it obtains food while either walking or hopping (note this includes species that also wade in water with their body raised above the water); 
+Insessorial = species spends much of the time perching above the ground, either in branches of trees and other vegetation (i.e. arboreal), or on other raised substrates including rocks, buildings, posts, and wires; 
+Aquatic = species spends much of the time sitting on water, and obtains  food while afloat or when diving under the water's surface; Generalist = species has no primary lifestyle because it spends time in different lifestyle classes", "AVONET",
+"min_latitude_avo", "The minimum latitudinal extent of the species range (restricted to breeding and resident range)", "AVONET",
+"max_latitude_avo", "The maximum latitudinal extent of the species range (restricted to breeding and resident range)", "AVONET",
+"centroid_latitude_avo", "The geometric centre of the species range (restricted to breeding and resident range), calculated using the calcCentroid function from the R package PBSmapping (Schnute et al., 2017). This function projects ranges into the Universal Transverse Mercator (UTM) projection, to accurately calculate centroids at high latitudes. To generate the breeding and resident range, we used the following settings: Presence: 1 (Extant). Origin 1 & 2 (Native & Reintroduced). Seasonality 1 & 2 (resident and breeding season)", "AVONET",
+"centroid_longitude_avo", "The geometric centre of the species range (restricted to breeding and resident range), calculated using the calcCentroid function from the R package PBSmapping (Schnute et al., 2017). This function projects ranges into the Universal Transverse Mercator (UTM) projection, to accurately calculate centroids at high latitudes. To generate the breeding and resident range, we used the following settings: Presence: 1 (Extant). Origin 1 & 2 (Native & Reintroduced). Seasonality 1 & 2 (resident and breeding season)", "AVONET",
+"range_size_avo", "The total area of the mapped range of the species (not the Extent of Occurrence [EOO]). We used maps shared by BirdLife International and restricted our analysis to areas of the range coded as Presence = 1 (Extant only), Origin = 1 & 2 (Native & Reintroduced),
+Seasonal = 1 & 2 (Resident and breeding). We calculated the total combined mapped area of these parts of the range using the areaPolygon function from the R package geosphere (Hijmans et al., 2011). This function accurately calculates the area in the World Geodetic System (WGS84) projection using spherical distances", "AVONET",
+"species_status_avo", "Extant = the species is extant according to BirdLife international
+Extinct = the species is extinct according to BirdLife international 
+Invalid = the species is currently not recognised by BirdLife international on the basis of published information suggesting it does not exist (e.g. it may be a hybrid taxon, a genetic variant, or fails to meet criteria for species status)", "AVONET",
+"redlist_criteria_iucn", "Species are assessed against five criteria (see below) based on geographic range, population size and population decline/increase, in addition to extinction probability analyses. These criteria determine which category is most appropriate for the species.", "IUCN",
+"population_trend_iucn", "Current population trend", "IUCN",
+"shape_leng_iucn", "Maximum length of the geographic range", "IUCN",
+"shape_area_iucn", "Total area (km^2) of the geographic range", "IUCN",
+"centroid_x_iucn", "Centroid X coordinate extracted from the geographic range", "IUCN",
+"centroid_y_iucn", "Centroid Y coordinate extracted from the geographic range", "IUCN",
+"ext_max_x_iucn", "Maximum X coordinate extracted from the geographic range", "IUCN",
+"ext_min_x_iucn", "Minimum X coordinate extracted from the geographic range", "IUCN",
+"ext_max_y_iucn", "Maximum Y coordinate extracted from the geographic range", "IUCN",
+"ext_min_y_iucn", "Minimum Y coordinate extracted from the geographic range", "IUCN",
+"land_regions_iucn", "Geographical region(s) of occurrence", "IUCN",
+"migratory_status_bldb", "Nomadic - moves in response to resources that are sporadic in time and distribution. Examples include Golden-plumed Parakeet (Leptosittaca branickii), Palm Lorikeet (Charmosyna palmarum), Grey Imperial-pigeon (Ducula pickeringii), Addax (Addax nasomaculatus) and Plains Mouse (Pseudomys australis). Nomadic species may congregate, but not predictably in terms of location and timing (e.g., Lesser Flamingo (Phoeniconaias minor)). Nomadic species have evolved to move. Nomadic species usually cannot be conserved at the site scale alone.
+Full migrant - a substantial proportion of the global or regional population makes regular or seasonal cyclical movements beyond the breeding range, with predictable timing and destinations. Examples include Siberian Crane (Leucogeranus leucogeranus), Bluefin Tuna (Thunnus spp.), Humpback Whale (Megaptera novaeangliae), Sockeye Salmon (Oncorhynchus nerka), Lake Sturgeon (Acipenser fulvescens), European Eel (Anguilla anguilla), Mekong Giant Catfish (Pangasianodon gigas) and American Horseshoe Crab (Limulus polyphemus). This includes species that may be migratory only in part of their range (e.g. Common Wildebeest (Connochaetes taurinus)) or part of their population (e.g. White-starred Robin (Pogonocichla stellata)), short-distance migrants (e.g., Black Crowned-Crane (Balearica pavonina)) and migrants that occasionally may respond to unusual conditions in a semi-nomadic way (e.g. Black Honeyeater (Sugomel nigrum) and Common Gull-billed Tern (Gelochelidion nilotica)). Migratory species may require conservation action (at specific sites, or beyond sites) along migration routes.
+The definitions above exclude “environmental response migrants” i.e. species that are largely resident but move opportunistically in response to irregular environmental conditions such as fire, locust eruptions, etc.,“rains migrants/arid migrants” i.e. species which move with unpredictable timing and destination in response to irregular rainfall patterns, “nutrition migrants/post-roost dispersers” i.e. species that disperse daily from roosts to forage, and “post-breeding dispersers” which may not make cyclical movements i.e. dispersers that may not return to the same breeding area. All such species should not be coded as migrants or nomads.
+Altitudinal migrant - regularly/seasonally makes cyclical movements to higher/ lower elevations with predictable timing and destinations. Examples include Three-wattled Bellbird (Procnias tricarunculatus). Partial altitudinal migrants might not be best conserved at the site scale alone, if individual sites do not encompass the full altitudinal range of the species.
+Not a migrant - not nomadic or migratory (full or altitudinal) as defined above.
+Unknown - not known if the taxon has any movement patterns.", "BLDB",
+"forest_dependency_bldb", "Dependence level (Low/Medium/High/Does not occur) on intact forest", "BLDB",
+"extent_of_occurrence_breeding_resident_km2_bldb", "Extent of occurrence (EOO) of a species' breeding/resident grounds", "BLDB",
+"generation_length_yrs_bldb", "the average age of parents of the current cohort, reflecting the turnover rate of breeding individuals in a population", "BLDB",
+"habitat_1_bldb", "Habitat level 1 (i.e.: highest level of habitat classification)", "BLDB",
+"habitat_2_bldb", "Habitat level 2 (i.e.: lowest level of habitat classification)", "BLDB",
+"occurrence_bldb", "BirdLife scores the occurrence of the species in each habitat as one of the following:
+
+Resident = known or thought to use the habitat throughout the year, including for breeding
+Breeding = known or thought to use the habitat for breeding during the appropriate season
+Non-breeding = known or thought to use the habitat, but not normally for breeding", "BLDB",
+"importance_bldb", "BirdLife scores the importance of each habitat coded for each species as one of the following:
+
+Suitable: The species occurs in the habitat regularly or frequently
+Major: The habitat is suitable (q.v.), and furthermore it is important for the survival of the species, either because it has an absolute requirement for the habitat at some point in its life cycle (e.g. for breeding or as a critical food source), or it is the primary habitat (or one of two primary habitats) within which the species usually occurs or within which most individuals occur.
+Marginal: The species occurs in the habitat only irregularly or infrequently, or only a small proportion of individuals are found in the habitat.
+Unknown: The habitat is of unknown importance to the species.", "BLDB",
+"altitude_bldb", "Altitude is recorded as the altitude(s) at which the species usually occurs, excluding extreme records.", "BLDB",
+"common_name_botw", "Species common names", "BOTW",
+"islandfraction_botw", "Fraction of population occurring on an island", "BOTW",
+"island_01_botw", "Binary coding, indicating if more than 50% of the population of a given species occurs on an island", "BOTW",
+"extantresident_island_range_km2_botw", "Resident area (km2) of the island portion of the extant population", "BOTW",
+"extantresident_continent_range_km2_botw", "Resident area (km2) of the continental portion of the extant population", "BOTW",
+"redlist_category_2020_botw", "The IUCN Red List Categories indicate how close a species is to becoming extinct.", "BOTW",
+"weight_botw", "Average mass of bird (g)", "BOTW",
+"length_botw", "Average total length of bird (cm)", "BOTW",
+"winter_territorial_botw", "Binary (Yes/No) indicating whether species is territorial in the wintering grounds", "BOTW",
+"mean_clutch_size_botw", "Mean number of eggs laid per breeding pair in a single brood", "BOTW", 
+"mean_number_of_broods_botw", "", "BOTW"
+)
+
+write.csv(all_data, "master.csv", row.names = FALSE, na = "")
+write.table(suff, "metadata.csv", row.names = FALSE, sep = ",")
+write.table(metadata, "metadata.csv", append = TRUE, row.names = FALSE, sep = ",")
 
 ```
 
